@@ -7,7 +7,7 @@
 <title>Flip 7 — LAN</title>
 <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22Flip%207%22%2C%22short_name%22%3A%22Flip7%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230d1f17%22%2C%22theme_color%22%3A%22%230d1f17%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%2520xmlns%253D%2522http%253A%252F%252Fwww.w3.org%252F2000%252Fsvg%2522%2520viewBox%253D%25220%25200%2520192%2520192%2522%253E%253Crect%2520width%253D%2522192%2522%2520height%253D%2522192%2522%2520fill%253D%2522%25230d1f17%2522%252F%253E%253Ctext%2520x%253D%252296%2522%2520y%253D%2522130%2522%2520font-size%253D%2522110%2522%2520font-family%253D%2522Arial%2522%2520font-weight%253D%2522900%2522%2520fill%253D%2522%2523f5e9c8%2522%2520text-anchor%253D%2522middle%2522%253E7%253C%252Ftext%253E%253C%252Fsvg%253E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D">
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 :root{
   --felt:#0d1f17; --felt-2:#13291e; --felt-line:rgba(245,233,200,.08);
@@ -106,6 +106,19 @@ input:focus{border-color:var(--gold)}
 .dup{outline:3px solid var(--red);animation:shake .4s}
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
 
+/* Spotlight : main du joueur en train de jouer (au-dessus de la sienne).
+   min-height fixe -> pas de layout shift quand c'est ton tour. */
+.spotlight{background:rgba(0,0,0,.18);border:1px solid var(--felt-line);border-radius:12px;
+  padding:10px 12px;min-height:94px;transition:opacity .2s}
+.spotlight.empty{opacity:.45}
+.spotlight .hand-label{margin-bottom:8px}
+.spotlight .hand-label b{color:var(--gold)}
+.hand.mini{min-height:60px;gap:6px}
+.gc.sm{width:42px;height:60px;font-size:20px;border-radius:8px}
+.gc.mod.sm{font-size:15px}
+.gc.act.sm{font-size:9px}
+.gc.sm .corner{font-size:8px;top:3px;left:4px}
+
 .flip-stat{display:flex;justify-content:space-between;align-items:center;font-size:13px;
   color:var(--cream-dim)}
 .flip-stat b{color:var(--cream);font-size:15px}
@@ -175,8 +188,12 @@ input:focus{border-color:var(--gold)}
     <div class="scoreboard" id="scoreboard"></div>
     <div class="turn-banner" id="turnBanner"></div>
     <div class="table">
+      <div id="spotlight" class="spotlight empty">
+        <div class="hand-label" id="spotLabel">&nbsp;</div>
+        <div class="hand mini" id="spotHand"></div>
+      </div>
       <div>
-        <div class="hand-label">Main du tour</div>
+        <div class="hand-label">Ta main</div>
         <div class="hand" id="hand"></div>
       </div>
       <div class="flip-stat">
@@ -249,6 +266,7 @@ function newGame(players){
     msg:"",
   };
   startRound(true);
+  pushState(); // diffuser l'état initial + basculer l'UI vers le jeu
 }
 function activePlayers(){return G.players.filter(p=>!p.roundDone);}
 function curPlayer(){return G.players[G.turn];}
@@ -257,8 +275,21 @@ function startRound(first){
   G.players.forEach(p=>{p.hand=[];p.busted=false;p.stayed=false;p.frozen=false;p.flip7=false;p.hasSC=false;p.roundDone=false;});
   G.turn=0; G.phase="play"; G.pending=null;
   if(!first) G.roundNo++;
+  dealOpening(); // chaque joueur reçoit une première carte
   // premier joueur = celui qui suit le dealer ; on garde simple : index 0
   G.msg=`Manche ${G.roundNo} — à ${curPlayer().name} de jouer`;
+}
+// Distribue 1 carte à chaque joueur. On évite Freeze/Flip 3 à la distribution
+// (elles exigent un ciblage immédiat) : on les remet sous la pioche et on retire.
+function dealOpening(){
+  G.players.forEach(p=>{
+    let card=null,guard=0;
+    do{
+      card=drawCard();
+      if(card&&(card.t==="freeze"||card.t==="flip3")){G.deck.unshift(card);card=null;}
+    }while(!card && guard++<60);
+    if(card) applyCardToPlayer(p,card);
+  });
 }
 function drawCard(){
   if(G.deck.length===0){G.deck=shuffle(G.discard);G.discard=[];}
@@ -454,15 +485,16 @@ function applyState(g){
 }
 function valColor(v){const c=["#9aa0a6","#c8453a","#d9a441","#e0843c","#3fae9b","#5a8fd6","#8b6fc4","#c44d8f","#4caf50","#ff7043","#26a69a","#7e57c2","#ec407a"];return c[v]||"#888";}
 
-function gameCardEl(c){
+function gameCardEl(c,small){
   const d=document.createElement("div");
-  if(c.t==="num"){d.className="gc num"+(c.dup?" dup":"");d.textContent=c.v;
+  const sm=small?" sm":"";
+  if(c.t==="num"){d.className="gc num"+sm+(c.dup?" dup":"");d.textContent=c.v;
     d.style.color=valColor(c.v);
     const cr=document.createElement("span");cr.className="corner";cr.textContent=c.v;cr.style.color=valColor(c.v);d.appendChild(cr);}
-  else if(c.t==="mod"){d.className="gc mod";d.textContent=c.label;}
-  else if(c.t==="freeze"){d.className="gc act freeze";d.textContent="FREEZE";}
-  else if(c.t==="flip3"){d.className="gc act flip3";d.textContent="FLIP 3";}
-  else if(c.t==="sc"){d.className="gc act sc";d.textContent="2ND CHANCE";}
+  else if(c.t==="mod"){d.className="gc mod"+sm;d.textContent=c.label;}
+  else if(c.t==="freeze"){d.className="gc act freeze"+sm;d.textContent="FREEZE";}
+  else if(c.t==="flip3"){d.className="gc act flip3"+sm;d.textContent="FLIP 3";}
+  else if(c.t==="sc"){d.className="gc act sc"+sm;d.textContent="2ND CHANCE";}
   return d;
 }
 
@@ -487,19 +519,33 @@ function renderGame(g){
   const cur=g.players[g.turn];
   const myTurn=cur&&cur.id===myId&&g.phase==="play"&&!g.pending;
 
-  // main affichée = celle du joueur courant (table partagée facon "spotlight")
-  const focus = g.pending ? g.players.find(p=>p.id===g.pending.actor) : cur;
-  const hand=$("hand");hand.innerHTML="";
-  (focus?focus.hand:[]).forEach(c=>hand.appendChild(gameCardEl(c)));
-  $("hand").previousElementSibling.textContent =
-     focus ? `Main de ${focus.name}` : "Main du tour";
+  // joueur "sous les projecteurs" = acteur d'une action en attente, sinon joueur courant
+  const spot = g.pending ? g.players.find(p=>p.id===g.pending.actor) : cur;
+  const spotIsMe = spot && spot.id===myId;
 
-  // flip count + pips sur le joueur focus
-  const dn=focus?new Set(focus.hand.filter(c=>c.t==="num").map(c=>c.v)).size:0;
+  // --- Spotlight (au-dessus) : main du joueur qui joue, seulement si ce n'est pas moi ---
+  const spEl=$("spotlight"), spHand=$("spotHand");
+  spHand.innerHTML="";
+  if(spot && !spotIsMe && g.phase==="play"){
+    spEl.classList.remove("empty");
+    (spot.hand||[]).forEach(c=>spHand.appendChild(gameCardEl(c,true)));
+    const sc=new Set(spot.hand.filter(c=>c.t==="num").map(c=>c.v)).size;
+    $("spotLabel").innerHTML=`En train de jouer · <b>${spot.name}</b> — ${sc}/7 · ${liveScore(spot)} pts`;
+  } else {
+    spEl.classList.add("empty");
+    $("spotLabel").innerHTML = myTurn ? "À toi de jouer" : "&nbsp;";
+  }
+
+  // --- Ma main (toujours visible, en bas) ---
+  const hand=$("hand");hand.innerHTML="";
+  (me?me.hand:[]).forEach(c=>hand.appendChild(gameCardEl(c)));
+
+  // flip count + pips + points sur MA main
+  const dn=me?new Set(me.hand.filter(c=>c.t==="num").map(c=>c.v)).size:0;
   $("flipCount").textContent=dn;
   const pips=$("pips");pips.innerHTML="";
   for(let i=0;i<7;i++){const p=document.createElement("div");p.className="pip"+(i<dn?" on":"");pips.appendChild(p);}
-  $("roundPts").textContent=focus?liveScore(focus):0;
+  $("roundPts").textContent=me?liveScore(me):0;
 
   // actions
   $("hitBtn").disabled=!myTurn;
@@ -668,9 +714,9 @@ $("startBtn").onclick=()=>{
 function drawQR(code){
   const url=location.href.split("#")[0].split("?")[0]+"?join="+code;
   $("qr").innerHTML="";
-  const cv=document.createElement("canvas");
-  QRCode.toCanvas(cv,url,{width:180,margin:1,color:{dark:"#0d1f17",light:"#ffffff"}},e=>{if(e)console.warn(e);});
-  $("qr").appendChild(cv);
+  if(typeof QRCode==="undefined"){console.warn("QRCode lib manquante");$("qr").classList.add("hidden");return;}
+  new QRCode($("qr"),{text:url,width:180,height:180,
+    colorDark:"#0d1f17",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
 }
 
 // ----- Auto-join depuis QR (?join=CODE) -----

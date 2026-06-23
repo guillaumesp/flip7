@@ -87,6 +87,17 @@ input:focus{border-color:var(--gold)}
 .turn-banner{text-align:center;font-size:14px;color:var(--cream-dim);letter-spacing:.05em}
 .turn-banner b{color:var(--gold)}
 
+/* Bannière personnelle : mon statut quand je suis sorti de la manche */
+.me-banner{text-align:center;font-size:15px;font-weight:800;letter-spacing:.02em;
+  padding:11px 16px;border-radius:12px;border:1px solid var(--felt-line)}
+.me-banner.out{background:rgba(200,69,58,.16);border-color:var(--red);color:var(--red)}
+.me-banner.safe{background:rgba(63,174,155,.14);border-color:var(--teal);color:var(--teal)}
+.me-banner.win{background:rgba(217,164,65,.16);border-color:var(--gold);color:var(--gold)}
+
+/* Qui reste encore en jeu sur la manche (visible par tous) */
+.still-in{text-align:center;font-size:13px;color:var(--cream-dim);letter-spacing:.04em}
+.still-in b{color:var(--cream);font-weight:700}
+
 .table{flex:1;background:radial-gradient(110% 80% at 50% 20%,var(--felt-2),var(--felt));
   border:1px solid var(--felt-line);border-radius:18px;padding:18px;display:flex;
   flex-direction:column;gap:14px;min-height:280px;box-shadow:var(--shadow)}
@@ -187,6 +198,8 @@ input:focus{border-color:var(--gold)}
   <div id="game" class="hidden">
     <div class="scoreboard" id="scoreboard"></div>
     <div class="turn-banner" id="turnBanner"></div>
+    <div class="me-banner hidden" id="meBanner"></div>
+    <div class="still-in hidden" id="stillIn"></div>
     <div class="table">
       <div id="spotlight" class="spotlight empty">
         <div class="hand-label" id="spotLabel">&nbsp;</div>
@@ -518,6 +531,27 @@ function renderGame(g){
   const me=g.players.find(p=>p.id===myId);
   const cur=g.players[g.turn];
   const myTurn=cur&&cur.id===myId&&g.phase==="play"&&!g.pending;
+
+  // --- Mon statut perso : suis-je sorti de la manche en cours ? ---
+  const meBanner=$("meBanner");
+  if(me && me.roundDone && g.phase==="play"){
+    meBanner.classList.remove("hidden");
+    if(me.busted){meBanner.className="me-banner out";meBanner.innerHTML="💥 Tu as busté — éliminé de la manche, 0 pt ce tour";}
+    else if(me.flip7){meBanner.className="me-banner win";meBanner.innerHTML="🎉 FLIP 7 ! Manche remportée";}
+    else if(me.frozen){meBanner.className="me-banner safe";meBanner.innerHTML="❄️ Tu es gelé — tes points sont sécurisés";}
+    else if(me.stayed){meBanner.className="me-banner safe";meBanner.innerHTML="✋ Tu restes — tes points sont sécurisés";}
+    else meBanner.classList.add("hidden");
+  } else meBanner.classList.add("hidden");
+
+  // --- Qui reste encore en jeu sur cette manche (visible par tous) ---
+  const stillEl=$("stillIn");
+  if(g.phase==="play"){
+    const still=g.players.filter(p=>!p.roundDone);
+    stillEl.classList.remove("hidden");
+    stillEl.innerHTML = still.length
+      ? "Encore en jeu : "+still.map(p=>`<b>${p.name}${p.id===myId?" (toi)":""}</b>`).join(" · ")
+      : "Plus personne en jeu — fin de manche";
+  } else stillEl.classList.add("hidden");
 
   // joueur "sous les projecteurs" = acteur d'une action en attente, sinon joueur courant
   const spot = g.pending ? g.players.find(p=>p.id===g.pending.actor) : cur;
